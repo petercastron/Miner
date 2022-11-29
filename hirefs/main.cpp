@@ -151,6 +151,7 @@ int main(int argc, char *argv[])
       {"log", required_argument, NULL, 'l'},
       {"daemon", no_argument, NULL, 'd'},
       {"prefix", no_argument, NULL, 'p'},
+      {"stob", no_argument, NULL, 't'},
       {"help", no_argument, NULL, 'h'},
       {"version", no_argument, NULL, 'v'},
       {NULL, 0, NULL, 0}};

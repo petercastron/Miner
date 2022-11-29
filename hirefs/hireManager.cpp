@@ -45,8 +45,9 @@ bool hireManager::start()
 {
   _stop_flag = false;
   
-  _hirefs_enquire_event.event_init("utgfs_enquire_event");
-  _hirefs_commit_event.event_init("utgfs_commit_event");
+  _hirefs_enquire_event.event_init("hirefs_enquire_event");
+  _hirefs_commit_event.event_init("hirefs_commit_event");
+  _hirefs_rent_volume_partitioning_event.event_init("hirefs_rent_volume_partitioning_event");
   
   debugEntry(LL_INFO, LOG_MODULE_INDEX_HIRE, "HIRE VERSION : %s", HIRE_PRODUCT_VERSION);
 
@@ -81,14 +82,23 @@ bool hireManager::start()
     return false;
   }
 
+  debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "create hirefs rent volume partitioning handle worker thread.");
+  if (false == _hirefs_rent_volume_partitioning_handle_thread.thread_worker_start(hireManager::thread_hirefs_rent_volume_partitioning_handle_worker, this)) {
+    _stop_flag = true;
+    debugEntry(LL_ERROR, LOG_MODULE_INDEX_HIRE, "create hirefs rent volume partitioning handle worker thread fail.");
+    return false;
+  }
+
   _hire_volume.start();
 }
 
 void hireManager::stop()
 {
+  _stop_flag = true;
+
   _hirefs_enquire_event.event_notify();
   _hirefs_commit_event.event_notify();
-  _stop_flag = true;
+  _hirefs_rent_volume_partitioning_event.event_notify();
   _websocket_server.stop();
   _hire_volume.stop();
 }
@@ -98,10 +108,12 @@ void hireManager::wait_stop()
   _hirefs_message_handle_thread.wait_thread_stop();
   _hirefs_enquire_handle_thread.wait_thread_stop();
   _hirefs_commit_handle_thread.wait_thread_stop();
+  _hirefs_rent_volume_partitioning_handle_thread.wait_thread_stop();
   _hire_volume.wait_stop();
 
   _hirefs_enquire_event.event_close();
   _hirefs_commit_event.event_close();
+  _hirefs_rent_volume_partitioning_event.event_close();
 }
 
 bool hireManager::load_hire_config(const std::string &hirefs_config_file_name)
@@ -214,6 +226,13 @@ void *hireManager::thread_hirefs_getsysteminfo_handle_worker(void *param)
 {
   hireManager *_this = (hireManager *) param;
   _this->hirefs_getsysteminfo_worker();
+  return NULL;
+}
+
+void *hireManager::thread_hirefs_rent_volume_partitioning_handle_worker(void *param)
+{
+  hireManager *_this = (hireManager *) param;
+  _this->hirefs_rent_volume_partitioning_worker();
   return NULL;
 }
 
@@ -413,6 +432,240 @@ void hireManager::hirefs_getsysteminfo_worker()
 
     _load_volume_bytes();
   }
+}
+
+void hireManager::hirefs_rent_volume_partitioning_worker()
+{
+  std::string do_rent_volume_partitioning_message = "";
+  debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "hireManager rent volume partitioning worker begin.");
+
+  while (!_stop_flag) {
+    do_rent_volume_partitioning_message = _hirefs_rent_volume_partitioning_queue.get_from_queue();
+    if (!do_rent_volume_partitioning_message.empty()) {
+      _do_rent_volume_process(do_rent_volume_partitioning_message);
+    } else {
+      int event_rtCode = _hirefs_rent_volume_partitioning_event.event_timewait(HIRE_ENQUIRE_CHECK_PERIOD);
+      if (ETIMEDOUT == event_rtCode) {
+
+      }
+    }
+  }
+
+  debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "hireManager rent volume partitioning worker end.");
+}
+
+void hireManager::_notify_rent_volume_partitioning(HIRE_RENT_ITEM &hire_rent_item)
+{
+  FJson::Value root;
+
+  root["cmd"] = RENT_VOMULE_PARTITIONING;
+  root["utg_rent_voucher"] = hire_rent_item.hire_rent_voucher;
+  root["utg_rent_addr"] = hire_rent_item.hire_rent_addr;
+  root["utg_rent_index"] = hire_rent_item.hire_rent_index;
+  root["utg_block_number"] = hire_rent_item.hire_block_number;
+  root["utg_rent_volume"] = hire_rent_item.hire_rent_volume;
+  root["utg_rent_time"] = hire_rent_item.hire_rent_time;
+  
+  bool bempty = false;
+  _hirefs_rent_volume_partitioning_queue.add_to_queue(root.toCompatString(), bempty);
+  _hirefs_rent_volume_partitioning_event.event_notify();
+
+  debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "rent volume partitioning notify : %s", root.toCompatString().c_str());
+}
+
+void hireManager::_notify_rent_volume_partitioning_retrieve(const std::string &hire_rent_voucher)
+{
+  FJson::Value root;
+
+  root["cmd"] = RENT_VOMULE_PARTITIONING_RETRIEVE;
+  root["utg_rent_voucher"] = hire_rent_voucher;
+  
+  bool bempty = false;
+  _hirefs_rent_volume_partitioning_queue.add_to_queue(root.toCompatString(), bempty);
+  _hirefs_rent_volume_partitioning_event.event_notify();
+
+  debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "rent volume partitioning retrieve notify : %s", root.toCompatString().c_str());
+}
+
+void hireManager::_notify_rent_volume_partitioning_retrieve_all()
+{
+  FJson::Value root, hire_rent_items;
+
+  _hire_volume.get_all_rent_items(hire_rent_items);
+  if (0 < hire_rent_items.size()) root["utg_rent_items"] = hire_rent_items;
+  root["cmd"] = RENT_VOMULE_PARTITIONING_RETRIEVE_ALL;
+
+  bool bempty = false;
+  _hirefs_rent_volume_partitioning_queue.add_to_queue(root.toCompatString(), bempty);
+  _hirefs_rent_volume_partitioning_event.event_notify();
+
+  debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "rent volume partitioning retrieve notify : %s", root.toCompatString().c_str());
+}
+
+void hireManager::_do_rent_volume_process(const std::string &hire_rent_message)
+{
+  /*
+  {
+    "cmd" : RENT_VOMULE_PARTITIONING,
+    "utg_rent_voucher":"ux56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+    "utg_rent_addr":"ux56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+    "utg_rent_index":"536870912-805306367",
+    "utg_block_number": "12324",
+    "utg_rent_volume": "5368709120",
+    "utg_rent_time": 30
+  }
+  */
+  FJson::Parser parser;
+  FJson::Value root;
+
+  debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "rent volume partitioning process : %s", hire_rent_message.c_str());
+
+  if (!parser.load_string(hire_rent_message, root)) return;
+
+  switch (root["cmd"].asUInt()) {
+  case RENT_VOMULE_PARTITIONING:
+    _do_rent_volume_partitioning(root);
+    break;
+  case RENT_VOMULE_PARTITIONING_RETRIEVE:
+    _do_rent_volume_partitioning_retrieve(root);
+    break;
+  case RENT_VOMULE_PARTITIONING_RETRIEVE_ALL:
+    _do_rent_volume_partitioning_retrieve_all(root);
+    break;
+  default:
+    break;
+  }
+}
+
+void hireManager::_do_rent_volume_partitioning(FJson::Value &root)
+{
+  std::string hire_rent_voucher = root["utg_rent_voucher"].asString();
+  std::string hire_rent_addr = root["utg_rent_addr"].asString();
+
+  std::string hire_rent_volume = root["utg_rent_volume"].asString();
+  u_int64_t hire_rent_volume_bytes = strtoll(hire_rent_volume.c_str(), NULL, 10);
+
+  std::string hire_block_number = root["utg_block_number"].asString();
+  u_int64_t hire_block_number_number = strtoll(hire_block_number.c_str(), NULL, 10);
+  u_int64_t hire_rent_time = root["utg_rent_time"].asUInt();
+  u_int64_t hire_rent_retrieve_time = time(NULL) + (hire_rent_time * _hire_one_day_block_number * HIRE_ONE_BLOCK_NUMBER_TIME);
+  
+  std::string hire_rent_index = root["utg_rent_index"].asString();
+  _hire_volume.do_volume_rent_volume_partitioning(hire_rent_index);
+
+  if (_notify_filesystem_do_rent_volume_partitioning(hire_rent_voucher, hire_rent_addr, hire_rent_volume_bytes, hire_rent_time, hire_rent_retrieve_time)) {
+    _hire_volume.update_rent_item_volume_partitioning(hire_rent_voucher);
+    char szbuffer[128] = {0};
+    sprintf(szbuffer, "%llu", _hire_last_block_number);
+    hireLogManager::instance().add_volume_rent_log(HIRE_LOG_ACT_RENT_VOLUME_PARTITIONING, hire_rent_voucher, std::string(szbuffer), auxHelper::intBytesToGBStr(hire_rent_volume_bytes), auxHelper::intBytesToGBStr(_hire_volume.get_hire_package_volume_free()));
+  }
+}
+
+void hireManager::_do_rent_volume_partitioning_retrieve(FJson::Value &root)
+{
+  std::string hire_rent_voucher = root["utg_rent_voucher"].asString();
+  if (_notify_filesystem_do_rent_volume_partitioning_retrieve(hire_rent_voucher)) {
+    char szbuffer[128] = {0};
+    sprintf(szbuffer, "%llu", _hire_last_block_number);
+    hireLogManager::instance().add_volume_rent_log(HIRE_LOG_ACT_RENT_VOLUME_PARTITIONING_RETRIEVE, hire_rent_voucher, std::string(szbuffer), std::string(""), auxHelper::intBytesToGBStr(_hire_volume.get_hire_package_volume_free()));
+  }
+}
+
+void hireManager::_do_rent_volume_partitioning_retrieve_all(FJson::Value &root)
+{
+  FJson::Value hire_rent_items;
+
+  hire_rent_items = root["utg_rent_items"];
+  if (hire_rent_items.isArray() && 0 < hire_rent_items.size()) {
+    for (size_t i = 0; i < hire_rent_items.size(); i++) {
+      std::string hire_rent_voucher = hire_rent_items[i]["utg_rent_voucher"].asString();
+      if (_notify_filesystem_do_rent_volume_partitioning_retrieve(hire_rent_voucher)) {
+        char szbuffer[128] = {0};
+        sprintf(szbuffer, "%llu", _hire_last_block_number);
+        hireLogManager::instance().add_volume_rent_log(HIRE_LOG_ACT_RENT_VOLUME_PARTITIONING_RETRIEVE, hire_rent_voucher, std::string(szbuffer), std::string(""), auxHelper::intBytesToGBStr(_hire_volume.get_hire_package_volume_free()));
+      }
+    }
+  }
+}
+
+bool hireManager::_notify_filesystem_do_rent_volume_partitioning(const std::string &hire_rent_voucher, const std::string &hire_rent_addr, u_int64_t hire_rent_volume, u_int64_t utg_rent_time, u_int64_t rent_retrieve_time)
+{
+  /*
+  input : 
+  {
+    "rent_voucher":"ux56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",    
+    "rent_addr":"ux56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",       
+    "rent_volume": 5368709120,   
+    "rent_time":30, 
+    "rent_retrieve_time":166857635112  
+  }
+  output:
+  {
+    "resualt": xxx
+  }
+  */
+  bool rtCode = false;
+  FJson::Value request_js, response_js;
+  FJson::Parser parser;
+  std::string request_message = "", response_message = "";
+
+  do {
+    request_js["rent_voucher"] = hire_rent_voucher;
+    request_js["rent_addr"] = hire_rent_addr;
+    request_js["rent_volume"] = hire_rent_volume / (1024 * 1024 *1024);
+    request_js["rent_time"] = utg_rent_time;
+    request_js["rent_retrieve_time"] = rent_retrieve_time;
+    
+    debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "POST http://127.0.0.1:8080/v1/utg/rent  request : %s", request_js.toCompatString().c_str());
+
+    response_message = _httpsession_post_msg("http://127.0.0.1:8080/v1/utg/rent", request_js.toCompatString());
+    if (response_message.empty()) break;
+    
+    debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "POST http://127.0.0.1:8080/v1/utg/rent  response : %s", response_message.c_str());
+
+    if (!parser.load_string(response_message, response_js)) break;
+
+    if (0 == response_js["result"].asUInt()) rtCode = true;
+
+  } while (false);
+  
+  return rtCode;
+}
+
+bool hireManager::_notify_filesystem_do_rent_volume_partitioning_retrieve(const std::string &hire_rent_voucher)
+{
+  /*
+  input : 
+  {
+    "rent_voucher":"ux56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
+  }
+  output:
+  {
+    "resualt": xxx
+  }
+  */
+  bool rtCode = false;
+  FJson::Value request_js, response_js;
+  FJson::Parser parser;
+  std::string request_message = "", response_message = "";
+
+  do {
+    request_js["rent_voucher"] = hire_rent_voucher;
+    
+     debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "POST http://127.0.0.1:8080/v1/utg/free  request : %s", request_js.toCompatString().c_str());
+
+    response_message = _httpsession_post_msg("http://127.0.0.1:8080/v1/utg/free", request_js.toCompatString());
+    if (response_message.empty()) break;
+    
+    debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "POST http://127.0.0.1:8080/v1/utg/free  response : %s", response_message.c_str());
+
+    if (!parser.load_string(response_message, response_js)) break;
+
+    if (0 == response_js["result"].asUInt()) rtCode = true;
+
+  } while (false);
+  
+  return rtCode;
 }
 
 bool hireManager::websocket_connect_handle(const std::string &ip, u_short port, const std::string &request_uri, void *parmame)
@@ -813,7 +1066,7 @@ void hireManager::_process_message_set_hire_info(ws_session &session, FJson::Val
   {
     "cmd": HIRECMD_SET_HIRE_INFO,
     "utg_addr": "xxx",          
-    "enc_hire_prikey": "xxx",    
+    "enc_utg_prikey": "xxx",    
     "utg_prikey_md5": "xxx",    
     "utg_config" : {
       "chain_id": xxx,
@@ -848,13 +1101,13 @@ void hireManager::_process_message_set_hire_info(ws_session &session, FJson::Val
       need_update_address = true;
     }
 
-    if (root.isMember("enc_hire_prikey")) {
-      if (!root["enc_hire_prikey"].isString()) {
+    if (root.isMember("enc_utg_prikey")) {
+      if (!root["enc_utg_prikey"].isString()) {
         rtCode = CE_PROTOCOL;
         break;
       }
 
-      enc_hire_prikey = root["enc_hire_prikey"].asString();
+      enc_hire_prikey = root["enc_utg_prikey"].asString();
       if (!enc_hire_prikey.empty()) {
         if (!root["utg_prikey_md5"].isString()) {
           rtCode = CE_PROTOCOL;
@@ -1060,8 +1313,10 @@ void hireManager::_process_message_volume_rent(FJson::Value& root)
     "utg_block": "xxx",          
     "utg_nonce" : "xxx,          
     "utg_block_hash": "xxx",     
-    "volume": "5"                
-    "voucher":"xxx",             
+    "volume": "5"             
+    "voucher":"xxx",
+    "rentAddr":"xxx",     
+    "rentTime": 30,
     "ni":"xxxxx"                 
     "sin":"xxxxx",               //HexString(HMAC_SHA256(ni, ticket))
   }
@@ -1078,9 +1333,10 @@ void hireManager::_process_message_volume_rent(FJson::Value& root)
     "result": CE_SUCC           
   }
   */
-  std::string volume_GB_str = "", voucher = "", hire_block = "";
+  std::string volume_GB_str = "", voucher = "", hire_block = "", rentAddr = "";
   CN_ERR rtCode = CE_SUCC;
   FJson::Value volume_message;
+  u_int64_t rentTime = 0;
 
   do
   {
@@ -1108,7 +1364,20 @@ void hireManager::_process_message_volume_rent(FJson::Value& root)
     voucher = hireHelper::from0xToux(root["voucher"].asString());
     root["voucher"] = voucher;
 
-    debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "volume rent : %s %s GB at block number %s", voucher.c_str(), volume_GB_str.c_str(), hire_block.c_str());
+
+    if (!root["rentAddr"].isString()) {
+      rtCode = CE_PROTOCOL;
+      break;
+    }
+    rentAddr = root["rentAddr"].asString();
+
+    if (!root["rentTime"].isInt()) {
+      rtCode = CE_PROTOCOL;
+      break;
+    }
+    rentTime = root["rentTime"].asUInt();
+
+    debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "volume rent : %s %s GB at block number %s by %s(%lu days)", voucher.c_str(), volume_GB_str.c_str(), hire_block.c_str(), rentAddr.c_str(), rentTime);
     
     rtCode = _hire_volume.do_volume_rent(root);
 
@@ -1221,6 +1490,7 @@ void hireManager::_process_message_volume_retrieve(FJson::Value& root)
     debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "retrieve volume : %s at block number %s", voucher.c_str(), hire_block.c_str());
 
     rtCode = _hire_volume.do_volume_retrieve(voucher, hire_block);
+    _notify_rent_volume_partitioning_retrieve(voucher);
 
   } while (false);
   
@@ -1247,6 +1517,7 @@ void hireManager::_process_message_volume_reset(FJson::Value& root)
   CN_ERR rtCode = CE_PENDING;
 
   if (!_bhire_onpledge) {
+    _notify_rent_volume_partitioning_retrieve_all();
     _hire_volume.set_stop_volume_package_flag(true);
     _hire_volume.notify_hireVolume(root.toCompatString());
   } else rtCode = CE_STATUS;
@@ -1910,6 +2181,7 @@ bool hireManager::_enquire_pledge_rpc(const std::string &hire_chain_post_url)
   std::string hire_address = "", request_message = "", response_message = "", ux_hire_address = "", u0x_hire_address = "";
   bool bhire_onpledge = _bhire_onpledge;
   std::map<std::string, int> rent_items_status;
+  std::list<HIRE_RENT_ITEM> rent_items_volume_partitioning;
 
   do {
 
@@ -1946,7 +2218,7 @@ bool hireManager::_enquire_pledge_rpc(const std::string &hire_chain_post_url)
     debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "spledgeinfo : %s", spledgeinfo_js.toCompatString().c_str());
     if (spledgeinfo_js.isNull()) {
       bhire_onpledge = false;
-      _hire_volume.update_rent_items_onpledge(rent_items_status, _hire_rent_items_outpledge);
+      _hire_volume.update_rent_items_onpledge(rent_items_status, _hire_rent_items_outpledge, rent_items_volume_partitioning);
 
       u_int64_t hire_volume_retrieve_block_number = _hire_volume_retrieve_block_number + _hire_one_day_block_number * 0.1;
       _hire_volume.update_rent_items(hire_lasted_block_number, hire_volume_retrieve_block_number);
@@ -1990,7 +2262,7 @@ bool hireManager::_enquire_pledge_rpc(const std::string &hire_chain_post_url)
         }
 
         lock_rent_items_outpledge_list();
-        _hire_volume.update_rent_items_onpledge(rent_items_status, _hire_rent_items_outpledge);
+        _hire_volume.update_rent_items_onpledge(rent_items_status, _hire_rent_items_outpledge, rent_items_volume_partitioning);
 
         std::list<std::string>::iterator it;
         for (it = _hire_rent_items_outpledge.begin(); it != _hire_rent_items_outpledge.end(); it++)
@@ -2002,13 +2274,17 @@ bool hireManager::_enquire_pledge_rpc(const std::string &hire_chain_post_url)
           _hirefs_commit_msg_queue.add_to_queue(HIRE_POST_POC_TYPE_RENT_RETRIEVE, bempty);
           _hirefs_commit_event.event_notify();
         }
+
+        std::list<HIRE_RENT_ITEM>::iterator it_onpledge;
+        for (it_onpledge = rent_items_volume_partitioning.begin(); it_onpledge != rent_items_volume_partitioning.end(); it_onpledge++)
+          _notify_rent_volume_partitioning(*it_onpledge);
       }
 
       u_int64_t hire_volume_retrieve_block_number = _hire_volume_retrieve_block_number + _hire_one_day_block_number * 0.1;
       _hire_volume.update_rent_items(hire_lasted_block_number, hire_volume_retrieve_block_number);
       
       _hire_volume.update_poc_groups();
-    } else _hire_volume.update_rent_items_onpledge(rent_items_status, _hire_rent_items_outpledge);
+    } else _hire_volume.update_rent_items_onpledge(rent_items_status, _hire_rent_items_outpledge, rent_items_volume_partitioning);
 
   } while (false);
 

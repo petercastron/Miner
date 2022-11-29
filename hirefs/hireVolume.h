@@ -11,11 +11,8 @@
 #define DATA_NODE_SIZE                       20
 #define DATA_MERKLE_TREE_DEPTH_INDEX         20 // 1M = 1024 * 1024 = 2^20
 
-//每个文件写入多少次数据
 #define HIRE_VOLUME_PACKAGE_FILE_WRITE_TIMES    256
-//每个文件写入多少块数据
-#define HIRE_VOLUME_PACKAGE_FILE_NODE_NUM       (HIRE_VOLUME_PACKAGE_FILE_WRITE_TIMES * 1024 * 1024LL)   
-//每个文件大小
+#define HIRE_VOLUME_PACKAGE_FILE_NODE_NUM       (HIRE_VOLUME_PACKAGE_FILE_WRITE_TIMES * 1024 * 1024LL)
 #define HIRE_VOLUME_PACKAGE_FILE_SIZE           (20 * HIRE_VOLUME_PACKAGE_FILE_NODE_NUM)
 
 #define HIRE_VOLUME_EVENT_TIMEOUT  60
@@ -109,17 +106,22 @@ typedef struct _HIRE_RENT_ITEM
     hire_rent_voucher = "";
     hire_rent_volume = "";
     hire_rent_index = "";
+    hire_rent_addr = "";
+    hire_rent_time = 0;
     bhire_rent_onpledge = false;
     bneed_retrieve_by_manual = false;
+    balready_volume_partitioning = false;
     phire_rent_merkletree_topmost = NULL;
   }
-
+  u_int64_t hire_rent_time;
+  std::string hire_rent_addr;
   std::string hire_block_number;
   std::string hire_rent_voucher;
   std::string hire_rent_volume;
   std::string hire_rent_index;
   bool bhire_rent_onpledge; //true rent on pledge, false rent out pledge
   bool bneed_retrieve_by_manual;
+  bool balready_volume_partitioning; //true already partitioning, false not partitioning
   MerkleTree *phire_rent_merkletree_topmost;
 } HIRE_RENT_ITEM;
 
@@ -165,12 +167,15 @@ public:
   CN_ERR do_volume_rent(FJson::Value &root);
   CN_ERR do_volume_rent_poc(FJson::Value &root);
   void get_all_rent_items(FJson::Value &rent_items, bool bvolumeToGB = false);
+  void do_volume_rent_volume_partitioning(const std::string &hire_rent_index);
+  
   //
   CN_ERR do_volume_retrieve(const std::string &hire_rent_voucher, const std::string &hire_block_number);
   u_int64_t get_hire_package_volume_free();
-  void update_rent_items_onpledge(std::map<std::string, int> &rent_items_status, std::list<std::string> &rent_items_outpledge);
+  void update_rent_items_onpledge(std::map<std::string, int> &rent_items_status, std::list<std::string> &rent_items_outpledge, std::list<HIRE_RENT_ITEM> &rent_items_volume_partitioning);
   void update_rent_items(u_int64_t hire_lasted_block_number, u_int64_t hire_volume_retrieve_block_number);
   void update_poc_groups();
+  void update_rent_item_volume_partitioning(const std::string &hire_rent_voucher);
 
   //group_name为 all 表示获取所有组
   void get_volume_poc_collection_by_group_name(FJson::Value &root, const std::string &group_name, std::map<std::string, std::string> &hire_poc_collection_groups);
@@ -183,7 +188,7 @@ private:
   void _process_volume_message(const std::string &message);
   void _do_volume_package(FJson::Value &root);
   void _do_volume_package_continue();
-
+  
   void _do_volume_reset();
   std::string _get_volume_package_file_name(u_int index);
   bool _read_volume_package_file_to_merkletree_datalevel(const std::string &file_name, MerkleTree &merkletree, ssize_t seek);
@@ -232,7 +237,7 @@ private:
   void _make_volume_rent_poc_head(HIRE_RENT_ITEM &hire_rent_item, u_int64_t random_node_index, const std::string &hire_block, const std::string &hire_nonce, const std::string &hire_block_hash, std::string &hire_volume_rent_poc_head);
   bool _get_volume_rent_poc(HIRE_RENT_ITEM &hire_rent_item, u_int64_t random_node_index, std::string &hire_volume_rent_poc);
   bool _check_hire_rent_merkletree(MerkleTree &merkletree_topmost, MerkleTree &rent_merkletree_topmost, const std::string &hire_rent_volume, const std::string &hire_rent_index);
-  bool _add_hire_rent_item(const std::string &hire_block_number, const std::string &hire_rent_voucher, const std::string &hire_rent_volume, const std::string &hire_rent_index, bool bhire_rent_onpledge, bool check_merkletree);
+  bool _add_hire_rent_item(const std::string &hire_block_number, const std::string &hire_rent_voucher, const std::string &hire_rent_volume, const std::string &hire_rent_index, const std::string &hire_rent_addr, u_int64_t hire_rent_time, bool bhire_rent_onpledge, bool check_merkletree, bool balready_volume_partitioning);
   bool _del_hire_rent_item(const std::string &hire_rent_voucher);
   void _clear_hire_rent_items();
   bool _has_rent_item_outpledge();
@@ -275,5 +280,7 @@ private:
 
   //需要提交poc的空间分组条目
   std::map<std::string, std::vector<HIRE_RENT_ITEM>> _hire_poc_groups;
+
+  std::string _volume_poc;
 };
 #endif //HIRE_POC_MANAGER_H

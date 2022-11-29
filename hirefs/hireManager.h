@@ -40,6 +40,12 @@
 #define HIRE_ENQUIRE_GAS_FAIL                                "enquire gas fail"
 #define HIRE_POST_TO_CHAIN_RPC_FAIL                          "hire post data to chain rpc fail"
 
+typedef enum _RENT_VOMULE_CMD {
+  RENT_VOMULE_PARTITIONING = 1,
+  RENT_VOMULE_PARTITIONING_RETRIEVE = 2,
+  RENT_VOMULE_PARTITIONING_RETRIEVE_ALL = 3,
+}_RENT_VOMULE_CMD;
+
 typedef struct _ws_session {
   std::string ip;
   std::string request_uri;
@@ -108,6 +114,9 @@ public:
   static void *thread_hirefs_getsysteminfo_handle_worker(void *param);
   void hirefs_getsysteminfo_worker();
 
+  static void *thread_hirefs_rent_volume_partitioning_handle_worker(void *param);
+  void hirefs_rent_volume_partitioning_worker();
+
   static bool websocket_connect_handle(const std::string &ip, u_short port, const std::string &request_uri, void *parmame);
   void process_websocket_connect(const std::string &ip, u_short port, const std::string &request_uri);
 
@@ -152,28 +161,36 @@ private:
   bool _load_poc_commit_history(const std::string &hire_poc_history_file, u_int64_t &block_number);
   bool _save_poc_commit_history(const std::string &hire_poc_history_file, const std::string &block_number);
   
-  //状态维护
   void _check_hire_status();
 
-  //链可能回滚，所以最新块的往前推20块
   std::string _enquire_block_number(const std::string &hire_chain_post_url);
   bool _get_block_as_random_seed(const std::string &hire_chain_post_url, FJson::Value &root);
-  //封装剩余空间POC证明
+
   bool _do_post_volume_package_poc_to_hirechain();
   bool _do_post_volume_package_poc_to_hirechain(const std::string &hire_chain_post_url);
-  //提交封装空间和出租空间POC证明
+
   bool _do_post_poc_collection_to_hirechain_by_hire_poc_group_name(const std::string &hire_poc_group_name, std::string &hire_poc_collection_post_result);
   bool _do_post_poc_collection_to_hirechain_by_hire_poc_group_name(std::map<std::string, std::string> &hire_poc_collection_post_results, const std::string &hire_poc_group_name);
   bool _do_post_poc_collection_to_hirechain_by_hire_poc_group_name(const std::string &hire_chain_post_url, std::map<std::string, std::string> &hire_poc_collection_post_results, const std::string &hire_poc_group_name);
-  //每日提交一次
+
   bool _do_post_poc_collection_to_hirechain_every_day(std::map<std::string, std::string> &hire_poc_collection_post_results);
-  //出租空间回收证明
+
   bool _do_volume_rent_retrieve_poc_to_hirechain();
   bool _do_volume_rent_retrieve_poc_to_hirechain(const std::string &hire_chain_post_url);
-  //检测POC证明POST的结果
+
   bool _check_poc_collection_post_result_from_hirechain(std::map<std::string, std::string> &hire_poc_collection_post_results, std::vector<std::string> &hire_poc_group_name_of_poc_collection_post_fail);
-  //RPC接口POST数据到链
+
   bool _do_post_poc_to_hirechain(const std::string &hire_chain_post_url, const std::string &hire_poc, std::string &result);
+
+  void _notify_rent_volume_partitioning(HIRE_RENT_ITEM &hire_rent_item);
+  void _notify_rent_volume_partitioning_retrieve(const std::string &hire_rent_voucher);
+  void _notify_rent_volume_partitioning_retrieve_all();
+  void _do_rent_volume_process(const std::string &hire_rent_message);
+  void _do_rent_volume_partitioning(FJson::Value &root);  
+  void _do_rent_volume_partitioning_retrieve(FJson::Value &root); 
+  void _do_rent_volume_partitioning_retrieve_all(FJson::Value &root);
+  bool _notify_filesystem_do_rent_volume_partitioning(const std::string &hire_rent_voucher, const std::string &hire_rent_addr, u_int64_t hire_rent_volume, u_int64_t utg_rent_time, u_int64_t rent_retrieve_time);
+  bool _notify_filesystem_do_rent_volume_partitioning_retrieve(const std::string &hire_rent_voucher);
 
   //
   bool _enquire_pledge();
@@ -219,12 +236,16 @@ private:
   thread_worker _hirefs_enquire_handle_thread;
   thread_worker _hirefs_commit_handle_thread;
   thread_worker _hirefs_getsysteminfo_handle_thread;
+  thread_worker _hirefs_rent_volume_partitioning_handle_thread;
 
   cond_event _hirefs_enquire_event;
   msg_queue<std::string> _hirefs_enquire_msg_queue;
 
   cond_event _hirefs_commit_event;
   msg_queue<std::string> _hirefs_commit_msg_queue;
+
+  cond_event _hirefs_rent_volume_partitioning_event;
+  msg_queue<std::string> _hirefs_rent_volume_partitioning_queue;
 
   std::string _hire_admin_passwd_md5;
   std::string _hire_private_key;

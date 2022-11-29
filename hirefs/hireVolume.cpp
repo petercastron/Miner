@@ -331,6 +331,7 @@ hireVolume::hireVolume()
   _hirevolume_write_msg_pool.setMaxBlockCount(3);
   _queue_size = 0;
   _hire_address = "";
+  _volume_poc = "";
 
   _init_locker_hire_rent();
   _init_locker_hire_poc_group();
@@ -508,6 +509,8 @@ CN_ERR hireVolume::do_volume_rent(FJson::Value &root)
 {
   std::string hire_rent_voucher = root["voucher"].asString();
   std::string hire_block_number = auxHelper::strToDecimalStr(root["utg_block"].asString());
+  std::string hire_rent_addr = root["rentAddr"].asString();
+  u_int64_t hire_rent_time = root["rentTime"].asUInt();
 
   debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "hire rent items size : %u", _hire_rent_items.size());
 
@@ -548,7 +551,7 @@ CN_ERR hireVolume::do_volume_rent(FJson::Value &root)
 
   debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "%s hire rent index : %s.", hire_rent_voucher.c_str(), hire_rent_index.c_str());
 
-  bool rtCode = _add_hire_rent_item(hire_block_number, hire_rent_voucher, hire_rent_volume, hire_rent_index, false, true);
+  bool rtCode = _add_hire_rent_item(hire_block_number, hire_rent_voucher, hire_rent_volume, hire_rent_index, hire_rent_addr, hire_rent_time, false, true, false);
   if (rtCode) {
     hire_package_volume_free -= rent_volume_bytes;
 
@@ -623,6 +626,23 @@ CN_ERR hireVolume::do_volume_rent_poc(FJson::Value &root)
   return rtCode;
 }
 
+void hireVolume::do_volume_rent_volume_partitioning(const std::string &hire_rent_index)
+{
+  u_int64_t rent_index_begin = 0, rent_index_end = 0;
+  _get_node_index_from_str(hire_rent_index, rent_index_begin, rent_index_end);
+
+  u_int64_t data_node_number = rent_index_end - rent_index_begin + 1;
+  u_int number_of_files_begin = rent_index_begin / HIRE_VOLUME_PACKAGE_FILE_NODE_NUM;
+  u_int number_of_files = data_node_number / HIRE_VOLUME_PACKAGE_FILE_NODE_NUM;
+  
+  debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "do_volume_rent_volume_partitioning delete (index %s) files [%u, %u)", hire_rent_index.c_str(), number_of_files_begin, (number_of_files_begin + number_of_files));
+  for (u_int64_t i = number_of_files_begin; i < (number_of_files_begin + number_of_files); i++) {
+    std::string file_name = _get_volume_package_file_name(i);
+    if (0 == access(file_name.c_str(), R_OK)) unlink(file_name.c_str());
+     debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "do_volume_rent_volume_partitioning delete file : %s", file_name.c_str());
+  }
+}
+
 CN_ERR hireVolume::_do_volume_rent_poc(HIRE_RENT_ITEM &hire_rent_item, FJson::Value &root)
 {
   bool rtCode = false;
@@ -653,6 +673,8 @@ void hireVolume::get_all_rent_items(FJson::Value &rent_items, bool bvolumeToGB)
   for (it = _hire_rent_items.begin(); it != _hire_rent_items.end(); it++) {
     FJson::Value hire_rent_item;
 
+    hire_rent_item["utg_rent_addr"] = it->second.hire_rent_addr;
+    hire_rent_item["utg_rent_time"] = it->second.hire_rent_time;
     hire_rent_item["utg_rent_voucher"] = it->second.hire_rent_voucher;
     if (bvolumeToGB) {
       u_int64_t rent_volume_Bytes = strtoll(it->second.hire_rent_volume.c_str(), NULL, 10);
@@ -666,7 +688,8 @@ void hireVolume::get_all_rent_items(FJson::Value &rent_items, bool bvolumeToGB)
     hire_rent_item["utg_block_number"] = it->second.hire_block_number;
     hire_rent_item["utg_rent_onpledge"] = it->second.bhire_rent_onpledge;
     hire_rent_item["utg_need_retrieve_by_manual"] = it->second.bneed_retrieve_by_manual;
-
+    hire_rent_item["utg_volume_partitioning"] = it->second.balready_volume_partitioning;
+    
     rent_items.push_back(hire_rent_item);
     
   }
@@ -692,6 +715,16 @@ CN_ERR hireVolume::do_volume_retrieve(const std::string &hire_rent_voucher, cons
   } else return CE_OPERATION_DENIED;
 
   return CE_SUCC;
+}
+
+void hireVolume::update_rent_item_volume_partitioning(const std::string &hire_rent_voucher)
+{
+  std::map<std::string, HIRE_RENT_ITEM>::iterator it;
+
+  lock_hire_rent();
+  it = _hire_rent_items.find(hire_rent_voucher);
+  if (it != _hire_rent_items.end()) it->second.balready_volume_partitioning = true;
+  unlock_hire_rent();
 }
 
 u_int64_t hireVolume::get_hire_package_volume_free()
@@ -994,6 +1027,7 @@ void hireVolume::_do_volume_reset()
   _volume_package_hire_blockchain_number_hash = "";
   _hire_package_volume_expect = 0;
   _hire_package_volume_actual = 0;
+  _volume_poc = "";
   
   _clear_hire_poc_groups();
   _clear_hire_rent_items();
@@ -1085,6 +1119,8 @@ bool hireVolume::_load_volume_status()
         "utg_rent_volume":"5368709120",
         "utg_rent_voucher":"ux56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
         "utg_block_number": "12324",
+        "utg_rent_addr":"ux56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+        "utg_rent_time": 30,
         "utg_rent_onpledge": true
       },
       {
@@ -1092,6 +1128,8 @@ bool hireVolume::_load_volume_status()
         "utg_rent_volume":"5368709120",
         "utg_rent_voucher":"ux57754379cebe357bd58e67739a1248c9c295432f926f7f2e77bb87d73eb1476e",
         "utg_block_number": "3214",
+        "utg_rent_addr":"ux56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+        "utg_rent_time": 30,
         "utg_rent_onpledge": false
       }
     ],
@@ -1118,6 +1156,8 @@ bool hireVolume::_load_volume_status()
 
       _hire_package_volume_expect = (u_int64_t)atoll(root["utg_package_volume_expect"].asString().c_str());
       _hire_package_volume_actual = (u_int64_t)atoll(root["utg_package_volume_actual"].asString().c_str());
+      
+      if (root.isMember("utg_volume_poc")) _volume_poc = root["utg_volume_poc"].asString();
 
       if (0 != _hire_package_volume_expect && _hire_package_volume_expect == _hire_package_volume_actual) {
         hire_rent_items = root["utg_rent_items"];
@@ -1127,11 +1167,14 @@ bool hireVolume::_load_volume_status()
             std::string hire_rent_volume = hire_rent_items[i]["utg_rent_volume"].asString();
             std::string hire_rent_index = hire_rent_items[i]["utg_rent_index"].asString();
             std::string hire_block_number = hire_rent_items[i]["utg_block_number"].asString();
+            std::string hire_rent_addr = hire_rent_items[i]["utg_rent_addr"].asString();
+            u_int64_t hire_rent_time = hire_rent_items[i]["utg_rent_time"].asUInt();
             bool bhire_rent_onpledge = hire_rent_items[i]["utg_rent_onpledge"].asBool();
+            bool balready_volume_partitioning = hire_rent_items[i]["utg_volume_partitioning"].asBool();
             
             debugEntry (LL_DEBUG, LOG_MODULE_INDEX_HIRE, "load hire package volume rent : %s, %s Bytes, %s.", hire_rent_voucher.c_str(), hire_rent_volume.c_str(), hire_rent_index.c_str());
             
-            _add_hire_rent_item(hire_block_number, hire_rent_voucher, hire_rent_volume, hire_rent_index, bhire_rent_onpledge, false);
+            _add_hire_rent_item(hire_block_number, hire_rent_voucher, hire_rent_volume, hire_rent_index, hire_rent_addr, hire_rent_time, bhire_rent_onpledge, false, balready_volume_partitioning);
           }
         }
 
@@ -1164,6 +1207,7 @@ bool hireVolume::_save_volume_status()
   root["utg_block"] = _volume_package_hire_blockchain_number;
   root["utg_nonce"] = _volume_package_hire_blockchain_nonce;
   root["utg_block_hash"] = _volume_package_hire_blockchain_number_hash;
+  if (!_volume_poc.empty()) root["utg_volume_poc"] = _volume_poc;
   
   //HIRE RENT ITEMS
   get_all_rent_items(hire_rent_items);
@@ -1606,14 +1650,24 @@ bool hireVolume::_get_volume_package_poc(u_int64_t random_node_index, MerkleTree
 
   do
   {
+    if (!_volume_poc.empty()) {
+      hire_volume_package_poc += _volume_poc;
+      rtCode = true;
+      break;
+    }
+
     rtCode = _load_B0_Bn1_Bn(random_node_index, data_node_zero, merkletree_cur, merkletree_pre);
     if (!rtCode) break;
 
-    rtCode = _add_B0_Bn1_Bn_to_poc(random_node_index, data_node_zero, merkletree_cur, merkletree_pre, hire_volume_package_poc);
+    rtCode = _add_B0_Bn1_Bn_to_poc(random_node_index, data_node_zero, merkletree_cur, merkletree_pre, _volume_poc);
     if (!rtCode) break;
 
-    rtCode = _make_volume_poc_merkletree_path(0, merkletree_topmost, random_node_index, merkletree_cur, hire_volume_package_poc);
+    rtCode = _make_volume_poc_merkletree_path(0, merkletree_topmost, random_node_index, merkletree_cur, _volume_poc);
     if (!rtCode) break;
+    
+    hire_volume_package_poc += _volume_poc;
+
+    _save_volume_status();
 
   } while (false);
 
@@ -1662,20 +1716,27 @@ bool hireVolume::_get_volume_rent_poc(HIRE_RENT_ITEM &hire_rent_item, u_int64_t 
 
   do
   {
+    if (!_volume_poc.empty()) {
+      hire_volume_rent_poc += _volume_poc;
+      rtCode = true;
+      break;
+    }
+
     if (NULL == hire_rent_item.phire_rent_merkletree_topmost) break;
     MerkleTree &merkletree_topmost = *(hire_rent_item.phire_rent_merkletree_topmost);
 
     rtCode = _load_B0_Bn1_Bn(random_node_index, data_node_zero, merkletree_cur, merkletree_pre);
     if (!rtCode) break;
 
-    rtCode = _add_B0_Bn1_Bn_to_poc(random_node_index, data_node_zero, merkletree_cur, merkletree_pre, hire_volume_rent_poc);
+    rtCode = _add_B0_Bn1_Bn_to_poc(random_node_index, data_node_zero, merkletree_cur, merkletree_pre, _volume_poc);
     if (!rtCode) break;
     
     u_int64_t rent_index_begin = 0, rent_index_end = 0;
     _get_node_index_from_str(hire_rent_item.hire_rent_index, rent_index_begin, rent_index_end);
-    rtCode = _make_volume_poc_merkletree_path(rent_index_begin, merkletree_topmost, random_node_index, merkletree_cur, hire_volume_rent_poc);
+    rtCode = _make_volume_poc_merkletree_path(rent_index_begin, merkletree_topmost, random_node_index, merkletree_cur, _volume_poc);
     if (!rtCode) break;
-
+    
+    hire_volume_rent_poc += _volume_poc;
   } while (false);
 
   debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "%s volume rent poc :\n%s", hire_rent_item.hire_rent_voucher.c_str(), hire_volume_rent_poc.c_str());
@@ -1705,7 +1766,7 @@ bool hireVolume::_check_hire_rent_merkletree(MerkleTree &merkletree_topmost, Mer
   return rtCode;
 }
 
-bool hireVolume::_add_hire_rent_item(const std::string &hire_block_number, const std::string &hire_rent_voucher, const std::string &hire_rent_volume, const std::string &hire_rent_index, bool bhire_rent_onpledge, bool check_merkletree)
+bool hireVolume::_add_hire_rent_item(const std::string &hire_block_number, const std::string &hire_rent_voucher, const std::string &hire_rent_volume, const std::string &hire_rent_index, const std::string &hire_rent_addr, u_int64_t hire_rent_time, bool bhire_rent_onpledge, bool check_merkletree, bool balready_volume_partitioning)
 {
   bool rtCode = false;
 
@@ -1716,7 +1777,10 @@ bool hireVolume::_add_hire_rent_item(const std::string &hire_block_number, const
     hire_rent_item.hire_rent_voucher = hire_rent_voucher;
     hire_rent_item.hire_rent_volume = hire_rent_volume;
     hire_rent_item.hire_rent_index = hire_rent_index;
+    hire_rent_item.hire_rent_addr = hire_rent_addr;
+    hire_rent_item.hire_rent_time = hire_rent_time;
     hire_rent_item.bhire_rent_onpledge = bhire_rent_onpledge;
+    hire_rent_item.balready_volume_partitioning = balready_volume_partitioning;
     
     MerkleTree *pmerkletree_topmost = new MerkleTree;
     if (NULL == pmerkletree_topmost) break;
@@ -1740,8 +1804,8 @@ bool hireVolume::_add_hire_rent_item(const std::string &hire_block_number, const
   return rtCode;
 }
 
-void hireVolume::update_rent_items_onpledge(std::map<std::string, int> &rent_items_status, std::list<std::string> &rent_items_outpledge)
-{  
+void hireVolume::update_rent_items_onpledge(std::map<std::string, int> &rent_items_status, std::list<std::string> &rent_items_outpledge, std::list<HIRE_RENT_ITEM> &rent_items_volume_partitioning)
+{
   rent_items_outpledge.clear();
   std::map<std::string, int>::iterator it_status;
   for (it_status = rent_items_status.begin(); it_status != rent_items_status.end(); it_status++) {
@@ -1755,8 +1819,15 @@ void hireVolume::update_rent_items_onpledge(std::map<std::string, int> &rent_ite
     if (it_status != rent_items_status.end()) {
       int rent_status = it_status->second;
       debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "rent item %s's status %u.", it->first.c_str(), rent_status);
-      it->second.bhire_rent_onpledge = (1 == rent_status || 4 == rent_status ) ? true : false;
+      bool bhire_rent_onpledge = (1 == rent_status || 4 == rent_status ) ? true : false;
+      if (bhire_rent_onpledge != it->second.bhire_rent_onpledge) {
+        it->second.bhire_rent_onpledge = bhire_rent_onpledge;
+        if (it->second.bhire_rent_onpledge) { 
+          debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "rent item %s is onpledge", it->first.c_str());
+        } else debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "rent item %s is outpledge", it->first.c_str());
+      }
       if (it->second.bhire_rent_onpledge) it->second.bneed_retrieve_by_manual = false;
+      if (it->second.bhire_rent_onpledge && !(it->second.balready_volume_partitioning)) rent_items_volume_partitioning.push_back(it->second);
     } else { 
       it->second.bhire_rent_onpledge = false;
       debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "rent item %s is outpledge", it->first.c_str());
@@ -1767,9 +1838,9 @@ void hireVolume::update_rent_items_onpledge(std::map<std::string, int> &rent_ite
 
 void hireVolume::update_rent_items(u_int64_t hire_lasted_block_number, u_int64_t hire_volume_retrieve_block_number)
 {
-  //std::vector<std::string> rent_items_need_del;
-  std::map<std::string, HIRE_RENT_ITEM>::iterator it;
+  u_int64_t hire_package_volume_free = get_hire_package_volume_free();
 
+  std::map<std::string, HIRE_RENT_ITEM>::iterator it;
   lock_hire_rent();
   for (it = _hire_rent_items.begin(); it != _hire_rent_items.end(); it++) {
     u_int64_t hire_rent_block_number = strtoll(it->second.hire_block_number.c_str(), NULL, 10);
@@ -1778,19 +1849,13 @@ void hireVolume::update_rent_items(u_int64_t hire_lasted_block_number, u_int64_t
       //rent_items_need_del.push_back(it->first);
       it->second.bneed_retrieve_by_manual = true;
       debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "rent item %s need to retrieve by manual.", it->first.c_str());
+
+      char szbuffer[128] = {0};
+      sprintf(szbuffer, "%llu", hire_lasted_block_number);
+      hireLogManager::instance().add_volume_rent_log(HIRE_LOG_ACT_RETRIEVE_BY_ENQUIRE_TIMEOUT, it->first, std::string(szbuffer), std::string(""), auxHelper::intBytesToGBStr(hire_package_volume_free));
     } else it->second.bneed_retrieve_by_manual = false;
   }
   unlock_hire_rent();
-
-#if 0
-  for (size_t i = 0; i < rent_items_need_del.size(); i++) {
-    _del_hire_rent_item(rent_items_need_del[i]);
-
-    char szbuffer[128] = {0};
-    sprintf(szbuffer, "%llu", hire_lasted_block_number);
-    hireLogManager::instance().add_volume_rent_log(HIRE_LOG_ACT_RETRIEVE_BY_ENQUIRE_TIMEOUT, rent_items_need_del[i], std::string(szbuffer), std::string(""), auxHelper::intBytesToGBStr(get_hire_package_volume_free()));
-  }
-#endif
 
   _save_volume_status();
 }
