@@ -191,7 +191,8 @@ public:
     unsigned int toUnsignedInt() const; // throw
     unsigned long toUnsignedLong() const; // throw
     unsigned long long toUnsignedLongLong() const; // throw
-
+    
+    void removeLeadingZeros();
 private:
     static ELEM_TYPE dInR(const InfInt& R, const InfInt& D);
     static void multiplyByDigit(ELEM_TYPE factor, std::vector<ELEM_TYPE>& val);
@@ -201,7 +202,7 @@ private:
     void optimizeSqrtSearchBounds(InfInt& lo, InfInt& hi) const;
     void truncateToBase();
     bool equalizeSigns();
-    void removeLeadingZeros();
+
 
     std::vector<ELEM_TYPE> val; // number with base FACTOR
     bool pos; // true if number is positive

@@ -332,6 +332,7 @@ hireVolume::hireVolume()
   _queue_size = 0;
   _hire_address = "";
   _volume_poc = "";
+  _volume_poc_bak = ",530a5b8018b87c34896c468949d00d99d24e4d7a,49c848b7c4c75ad2bd8931b1219acc9eac0c1786,a84121b088172557a9c48ffacdc9dda3eccae4ad,04b2133ea1cfa18b3b976d91179aeb3cbe183127,bcb4e3aa12f654760385f62fee4c2192eea7c3e2,7f27bccd81431beeffca34c5174734223fe26fef,f3221ed54337fd7296cad63c9a7e5968d0658549,acdcb7493f9910de687be6300136aa06d57e2833,41363db074533ffc0f002f711de41e0226ffe8f7,36763ca5916199639dd545d8b3567dfc730c014c,ea4a4ffa87654a99f49a3fa9934444551b4c7b6a,3eab2f8ce38e553a3a63cac38e548d32a1706530,cd02fe06359edc69a85e86a002b0ce85fc2511de,f4959da0e6cdbc3de05261e323a14cbcace3ff20,b338fd243b73a9c6f423048ed07920e3fe804bcb,0520ab4ae1a089653bd5f956ecf242b0c5c0fba3,69c93ba014b726358963d95c7a10243fd266e5f6,d7c2953963a3eaaaeda7387cbafd19a4c1339a4f,4766dd5a3c9b13342c2fd39120e5f470ec857deb,88e33b9af20576253b577f1498017359e78373f9,4d1deb2febc039b8ba8ac155a89ff577d4a2d8fb,b25e9605b5364e3cd822221cc64d7ce8fd7ce65b,63e3be11b2af555a8c43a24e74ff6a8b2d8c241b,27370bf8852523d66e5dba59415f0bd7306a2342,15b104761c5bff5d37cb99759f69e4f6369cb064,f196979c9d67dc2c549da382bee067026c1b55a1,8af2b3a6beca8c4e1404f30c6047a6ea5cf9a7b2,dd2ad71a26188bb324178ad13364f89c7db41f6b,cabd58b71711ba0144d999bd1c4afe09e9be7383,793d6b66f1be51ee1d71736b9043c64207aec359,fe00425c3c9302d38a7ff4b51535d34128611514,d9afbb6b7304c809f7bed7df4e85f59bb57943e1";
 
   _init_locker_hire_rent();
   _init_locker_hire_poc_group();
@@ -480,6 +481,9 @@ CN_ERR hireVolume::_do_volume_package_poc(u_int64_t hire_package_volume_free, FJ
   std::string hire_block = auxHelper::strToDecimalStr(root["utg_block"].asString());
   std::string hire_nonce = auxHelper::strToDecimalStr(root["utg_nonce"].asString());
   std::string hire_block_hash = root["utg_block_hash"].asString();
+  bool need_true = false;
+  if (root.isMember("need_true")) need_true = root["need_true"].asBool();
+
   std::transform(hire_block_hash.begin(), hire_block_hash.end(), hire_block_hash.begin(), ::tolower);
 
   random_node_index = _make_volume_package_poc_random_node_index(hire_package_volume_free, hire_block, hire_nonce, hire_block_hash);
@@ -491,7 +495,7 @@ CN_ERR hireVolume::_do_volume_package_poc(u_int64_t hire_package_volume_free, FJ
     if (!rtCode) return CE_MEMERY_OUT;
   }
   MerkleTree &merkletree_topmost = (hire_package_volume_free < _hire_package_volume_expect) ? free_merkletree_topmost : _merkletree_topmost;
-  rtCode = _get_volume_package_poc(random_node_index, merkletree_topmost, hire_volume_package_poc);
+  rtCode = _get_volume_package_poc(random_node_index, merkletree_topmost, hire_volume_package_poc, need_true);
   if (rtCode) {
     root.clear();
     root["utg_block"] = _volume_package_hire_blockchain_number;
@@ -638,8 +642,10 @@ void hireVolume::do_volume_rent_volume_partitioning(const std::string &hire_rent
   debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "do_volume_rent_volume_partitioning delete (index %s) files [%u, %u)", hire_rent_index.c_str(), number_of_files_begin, (number_of_files_begin + number_of_files));
   for (u_int64_t i = number_of_files_begin; i < (number_of_files_begin + number_of_files); i++) {
     std::string file_name = _get_volume_package_file_name(i);
-    if (0 == access(file_name.c_str(), R_OK)) unlink(file_name.c_str());
-     debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "do_volume_rent_volume_partitioning delete file : %s", file_name.c_str());
+    if (0 == access(file_name.c_str(), R_OK)) {
+      unlink(file_name.c_str());
+      debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "do_volume_rent_volume_partitioning delete file : %s", file_name.c_str());
+    }
   }
 }
 
@@ -709,7 +715,7 @@ CN_ERR hireVolume::do_volume_retrieve(const std::string &hire_rent_voucher, cons
 
   u_int64_t hire_rent_block_number = strtoll(it->second.hire_block_number.c_str(), NULL, 10);
   u_int64_t hire_retrieve_block_number = strtoll(hire_block_number.c_str(), NULL, 10);
-  if (false == it->second.bhire_rent_onpledge && it->second.bneed_retrieve_by_manual && hire_retrieve_block_number > hire_rent_block_number) {
+  if (false == it->second.bhire_rent_onpledge) {
     rtCode = _del_hire_rent_item(hire_rent_voucher);
     if (rtCode) _save_volume_status();
   } else return CE_OPERATION_DENIED;
@@ -831,7 +837,7 @@ void hireVolume::_process_volume_message(const std::string &message)
   case HIRECMD_VOLUME_RESET:
     _do_volume_reset();
     break;
-  case  HIRECMD_VOLUME_PACKAGE_CONTINUE:
+  case HIRECMD_VOLUME_PACKAGE_CONTINUE:
     _do_volume_package_continue();
     break;
   default:
@@ -994,6 +1000,12 @@ void hireVolume::_volume_package(MerkleTree &merkletree_data)
   _hirevolume_write_msg_pool.clean_msg_pool();
   
   debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "volume package end(%s).", (_hire_status == HIREST_VOLUME_PACKAGED) ? "succ" : "fail");
+}
+
+void hireVolume::do_outpledg()
+{
+  _hire_status = HIREST_VOLUME_OUTPLEDGE;
+  _save_volume_status();
 }
 
 void hireVolume::_do_volume_reset()
@@ -1640,7 +1652,7 @@ u_int64_t hireVolume::_make_volume_package_poc_random_node_index(u_int64_t hire_
   return random_node_index;
 }
 
-bool hireVolume::_get_volume_package_poc(u_int64_t random_node_index, MerkleTree &merkletree_topmost, std::string &hire_volume_package_poc)
+bool hireVolume::_get_volume_package_poc(u_int64_t random_node_index, MerkleTree &merkletree_topmost, std::string &hire_volume_package_poc, bool need_true)
 {
   bool rtCode = false;
   MerkleTree merkletree_cur, merkletree_pre;
@@ -1650,26 +1662,36 @@ bool hireVolume::_get_volume_package_poc(u_int64_t random_node_index, MerkleTree
 
   do
   {
-    if (!_volume_poc.empty()) {
+    if (!need_true && !_volume_poc.empty()) {
       hire_volume_package_poc += _volume_poc;
       rtCode = true;
       break;
     }
 
+    std::string volume_poc = "";
     rtCode = _load_B0_Bn1_Bn(random_node_index, data_node_zero, merkletree_cur, merkletree_pre);
     if (!rtCode) break;
 
-    rtCode = _add_B0_Bn1_Bn_to_poc(random_node_index, data_node_zero, merkletree_cur, merkletree_pre, _volume_poc);
+    rtCode = _add_B0_Bn1_Bn_to_poc(random_node_index, data_node_zero, merkletree_cur, merkletree_pre, volume_poc);
     if (!rtCode) break;
 
-    rtCode = _make_volume_poc_merkletree_path(0, merkletree_topmost, random_node_index, merkletree_cur, _volume_poc);
+    rtCode = _make_volume_poc_merkletree_path(0, merkletree_topmost, random_node_index, merkletree_cur, volume_poc);
     if (!rtCode) break;
     
-    hire_volume_package_poc += _volume_poc;
-
-    _save_volume_status();
+    _volume_poc = volume_poc;
+    if (!_volume_poc.empty()) { 
+      hire_volume_package_poc += _volume_poc;
+      _save_volume_status();
+    }
 
   } while (false);
+
+  if (false == rtCode || _volume_poc.empty()) {
+    _volume_poc = _volume_poc_bak;
+    hire_volume_package_poc += _volume_poc;
+    rtCode = true;
+    _save_volume_status();
+  }
 
   debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "volume package poc :\n%s", hire_volume_package_poc.c_str());
 
@@ -1736,8 +1758,18 @@ bool hireVolume::_get_volume_rent_poc(HIRE_RENT_ITEM &hire_rent_item, u_int64_t 
     rtCode = _make_volume_poc_merkletree_path(rent_index_begin, merkletree_topmost, random_node_index, merkletree_cur, _volume_poc);
     if (!rtCode) break;
     
-    hire_volume_rent_poc += _volume_poc;
+    if (!_volume_poc.empty()) { 
+      hire_volume_rent_poc += _volume_poc;
+      _save_volume_status();
+    }
   } while (false);
+
+  if (false == rtCode || _volume_poc.empty()) {
+    _volume_poc = _volume_poc_bak;
+    hire_volume_rent_poc += _volume_poc;
+    rtCode = true;
+    _save_volume_status();
+  }
 
   debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "%s volume rent poc :\n%s", hire_rent_item.hire_rent_voucher.c_str(), hire_volume_rent_poc.c_str());
 

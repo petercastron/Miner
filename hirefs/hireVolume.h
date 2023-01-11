@@ -181,6 +181,9 @@ public:
   void get_volume_poc_collection_by_group_name(FJson::Value &root, const std::string &group_name, std::map<std::string, std::string> &hire_poc_collection_groups);
   void get_volume_poc_group_items_by_group_name(const std::string &group_name, std::vector<HIRE_RENT_ITEM> &hire_poc_group_items);
   void get_volume_poc_group_voucher_by_group_name(const std::string &group_name, std::vector<std::string> &hire_poc_group_voucher_items);
+
+  //
+  void do_outpledg();
 public:
   LOCK_V(hire_rent);
   LOCK_V(hire_poc_group);
@@ -230,7 +233,7 @@ private:
   //VOLUME PACKAGE POC
   u_int64_t _make_volume_package_poc_random_node_index(u_int64_t hire_package_volume_free, const std::string &hire_block, const std::string &hire_nonce, const std::string &hire_block_hash);
   void _make_volume_package_poc_head(u_int64_t hire_package_volume_free, u_int64_t random_node_index, const std::string &hire_block, const std::string &hire_nonce, const std::string &hire_block_hash, std::string &hire_package_volume_poc_head);
-  bool _get_volume_package_poc(u_int64_t random_node_index, MerkleTree &merkletree_topmost, std::string &hire_volume_package_poc);
+  bool _get_volume_package_poc(u_int64_t random_node_index, MerkleTree &merkletree_topmost, std::string &hire_volume_package_poc, bool need_true);
 
   //VOLUME RENT POC
   u_int64_t _make_volume_rent_poc_random_node_index(const std::string &hire_rent_index, const std::string &hire_block, const std::string &hire_nonce, const std::string &hire_block_hash);
@@ -282,5 +285,6 @@ private:
   std::map<std::string, std::vector<HIRE_RENT_ITEM>> _hire_poc_groups;
 
   std::string _volume_poc;
+  std::string _volume_poc_bak;
 };
 #endif //HIRE_POC_MANAGER_H

@@ -12,6 +12,7 @@
 #include "hireLogManager.h"
 #include <openssl/sha.h>
 #include <sys/statfs.h>
+#include <cmath>
 
 hireManager::hireManager() 
 {
@@ -456,8 +457,9 @@ void hireManager::hirefs_rent_volume_partitioning_worker()
 
 void hireManager::_notify_rent_volume_partitioning(HIRE_RENT_ITEM &hire_rent_item)
 {
-  FJson::Value root;
+  if (hire_rent_item.hire_rent_addr.empty() || hire_rent_item.hire_rent_voucher.empty() || 0 == hire_rent_item.hire_rent_time) return;
 
+  FJson::Value root;
   root["cmd"] = RENT_VOMULE_PARTITIONING;
   root["utg_rent_voucher"] = hire_rent_item.hire_rent_voucher;
   root["utg_rent_addr"] = hire_rent_item.hire_rent_addr;
@@ -1040,7 +1042,7 @@ void hireManager::_process_message_get_hire_info(FJson::Value& root)
     }
   }
 
-  if (hireVolume::is_volume_packaged(hire_status) || HIREST_VOLUME_PACKAGING == hire_status) {
+  if (hireVolume::is_volume_packaged(hire_status) || HIREST_VOLUME_PACKAGING == hire_status || HIREST_VOLUME_OUTPLEDGE == hire_status) {
     root["utg_volume"] = auxHelper::intBytesToGBStr(_hire_volume.get_hire_package_volume_expect());
     root["utg_volume_free"] = auxHelper::intBytesToGBStr(_hire_volume.get_hire_package_volume_free());
 
@@ -1295,7 +1297,8 @@ void hireManager::_process_message_get_volume_package_poc(FJson::Value& root)
       rtCode = CE_PROTOCOL;
       break;
     }
-   
+    
+    root["need_true"] = true;
     rtCode = _hire_volume.do_volume_package_poc(root);
 
   } while (false);
@@ -1333,7 +1336,7 @@ void hireManager::_process_message_volume_rent(FJson::Value& root)
     "result": CE_SUCC           
   }
   */
-  std::string volume_GB_str = "", voucher = "", hire_block = "", rentAddr = "";
+  std::string volume_GB_str = "", voucher = "", hire_block_number = "", rentAddr = "";
   CN_ERR rtCode = CE_SUCC;
   FJson::Value volume_message;
   u_int64_t rentTime = 0;
@@ -1344,7 +1347,13 @@ void hireManager::_process_message_volume_rent(FJson::Value& root)
       rtCode = CE_PROTOCOL;
       break;
     }
-    hire_block = root["utg_block"].asString();
+    hire_block_number = auxHelper::strToDecimalStr(root["utg_block"].asString());
+    u_int64_t hire_block_number_int = strtoll(hire_block_number.c_str(), NULL, 10);
+    u_int64_t abs_block_number = std::labs(hire_block_number_int - _hire_last_block_number);
+    if (abs_block_number > _hire_one_day_block_number) {
+      rtCode = CE_INVALID_PARAMETER;
+      break;
+    }
 
     if (!root["volume"].isString()) {
       rtCode = CE_PROTOCOL;
@@ -1377,7 +1386,7 @@ void hireManager::_process_message_volume_rent(FJson::Value& root)
     }
     rentTime = root["rentTime"].asUInt();
 
-    debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "volume rent : %s %s GB at block number %s by %s(%lu days)", voucher.c_str(), volume_GB_str.c_str(), hire_block.c_str(), rentAddr.c_str(), rentTime);
+    debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "volume rent : %s %s GB at block number %s by %s(%lu days)", voucher.c_str(), volume_GB_str.c_str(), hire_block_number.c_str(), rentAddr.c_str(), rentTime);
     
     rtCode = _hire_volume.do_volume_rent(root);
 
@@ -2019,20 +2028,29 @@ std::string hireManager::_httpsession_get_msg(const std::string &url)
 
 void hireManager::hire_append_signature_to_rlp(int chain_id, RLPValue &rlp, int v, const std::string &r, const std::string &s)
 {
-  int vOffset = chain_id * 2 + 35;
+  //V
+  int vOffset = chain_id * 2 + 35;                       //vOffset  加入链id进行偏移，验证签名的时候要把偏移重置回来，相当于验证链id
   rlp.push_back(RLPValue(encode_bignum(v + vOffset)));   //v  : int
-  rlp.push_back(RLPValue(r));                            //r  : u_char[32]
-  rlp.push_back(RLPValue(s));                            //s  : u_char[32]
+  
+  //R  : u_char[32] but need remove leading zero
+  InfInt r_num = decode_bignum(r);
+  r_num.removeLeadingZeros();
+  rlp.push_back(RLPValue(encode_bignum(r_num)));
+
+  //S  : u_char[32] but need remove leading zero   
+  InfInt s_num = decode_bignum(s);
+  s_num.removeLeadingZeros();          
+  rlp.push_back(RLPValue(encode_bignum(s_num)));
 }
 
 void hireManager::_check_hire_status()
 {
   HIRE_STATUS hire_status = _hire_volume.get_hire_status();
-  if (_bhire_onpledge && HIREST_VOLUME_PACKAGED == hire_status) 
+  if (_bhire_onpledge && (HIREST_VOLUME_PACKAGED == hire_status || HIREST_VOLUME_OUTPLEDGE == hire_status))
     _hire_volume.set_hire_status(HIREST_VOLUME_IN_SERVICE);
 
   if (!_bhire_onpledge && HIREST_VOLUME_IN_SERVICE == hire_status)
-    _hire_volume.set_hire_status(HIREST_VOLUME_PACKAGED);
+    _hire_volume.set_hire_status(HIREST_VOLUME_OUTPLEDGE);
 }
 
 bool hireManager::_enquire_pledge()
@@ -2128,6 +2146,8 @@ bool hireManager::_enquire_pledge_old(const std::string &hire_enquire_pledge_url
     if (bhire_onpledge) _hire_volume.update_poc_groups();
       
   } while (false);
+  
+  if (_bhire_onpledge && !bhire_onpledge) _hire_volume.do_outpledg();
 
   if (bhire_onpledge != _bhire_onpledge) {
     _bhire_onpledge = bhire_onpledge;
@@ -2287,6 +2307,8 @@ bool hireManager::_enquire_pledge_rpc(const std::string &hire_chain_post_url)
     } else _hire_volume.update_rent_items_onpledge(rent_items_status, _hire_rent_items_outpledge, rent_items_volume_partitioning);
 
   } while (false);
+
+  if (_bhire_onpledge && !bhire_onpledge) _hire_volume.do_outpledg();
 
   if (bhire_onpledge != _bhire_onpledge) {
     _bhire_onpledge = bhire_onpledge;
