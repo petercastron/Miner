@@ -618,12 +618,12 @@ bool hireManager::_notify_filesystem_do_rent_volume_partitioning(const std::stri
     request_js["rent_time"] = utg_rent_time;
     request_js["rent_retrieve_time"] = rent_retrieve_time;
     
-    debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "POST http://127.0.0.1:8080/v1/utg/rent  request : %s", request_js.toCompatString().c_str());
+    debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "POST http://127.0.0.1:8081/v1/utg/rent  request : %s", request_js.toCompatString().c_str());
 
-    response_message = _httpsession_post_msg("http://127.0.0.1:8080/v1/utg/rent", request_js.toCompatString());
+    response_message = _httpsession_post_msg("http://127.0.0.1:8081/v1/utg/rent", request_js.toCompatString());
     if (response_message.empty()) break;
     
-    debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "POST http://127.0.0.1:8080/v1/utg/rent  response : %s", response_message.c_str());
+    debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "POST http://127.0.0.1:8081/v1/utg/rent  response : %s", response_message.c_str());
 
     if (!parser.load_string(response_message, response_js)) break;
 
@@ -654,12 +654,12 @@ bool hireManager::_notify_filesystem_do_rent_volume_partitioning_retrieve(const 
   do {
     request_js["rent_voucher"] = hire_rent_voucher;
     
-     debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "POST http://127.0.0.1:8080/v1/utg/free  request : %s", request_js.toCompatString().c_str());
+     debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "POST http://127.0.0.1:8081/v1/utg/free  request : %s", request_js.toCompatString().c_str());
 
-    response_message = _httpsession_post_msg("http://127.0.0.1:8080/v1/utg/free", request_js.toCompatString());
+    response_message = _httpsession_post_msg("http://127.0.0.1:8081/v1/utg/free", request_js.toCompatString());
     if (response_message.empty()) break;
     
-    debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "POST http://127.0.0.1:8080/v1/utg/free  response : %s", response_message.c_str());
+    debugEntry(LL_DEBUG, LOG_MODULE_INDEX_HIRE, "POST http://127.0.0.1:8081/v1/utg/free  response : %s", response_message.c_str());
 
     if (!parser.load_string(response_message, response_js)) break;
 
